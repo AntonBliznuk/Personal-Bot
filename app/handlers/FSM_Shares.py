@@ -3,7 +3,7 @@ from aiogram.types import Message
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.context import FSMContext
 
-from app.DataManagement import insert_shares
+from config import db_menage
 from app.keyboards import sub_kb
 
 router_shares = Router()
@@ -21,26 +21,30 @@ async def shares_insert(message: Message, state: FSMContext):
     await message.answer('Введіть тикер активу.\nПриклад: aapl, googl, nvda, AMZN',
                          reply_markup=types.ReplyKeyboardRemove())
 
+
 @router_shares.message(Shares.name)
 async def shares_name(message: Message, state: FSMContext):
-    # Update the state data with the received share ticker
-    await state.update_data(name=message.text)
-    # Set the state to `Shares.count` for receiving the amount
-    await state.set_state(Shares.count)
-    # Prompt the user to enter the amount of the share
-    await message.answer('Введіть кількість.\nПриклад: 1.0, 2.3')
+    if db_menage.is_valid_asset_name(message.text, 'share', show_error=False):
+        await state.update_data(name=message.text)
+        await state.set_state(Shares.count)
+        await message.answer('Введіть кількість.\nПриклад: 1.0, 2.3')
+    else:
+        await message.answer("Не вірна назва активу.", reply_markup=sub_kb)
+        await state.clear()
+
+
 
 @router_shares.message(Shares.count)
 async def shares_count(message: Message, state: FSMContext):
+
     # Update the state data with the received amount
-    await state.update_data(count=message.text)
+    if db_menage.is_valid_amount(message.text, show_error=False):
+        await state.update_data(count=message.text)
+        data = await state.get_data()
+        db_menage.insert_asset_info(message.from_user.id, 'share', data['name'], data['count'])
+        await message.answer('Дані збережено.', reply_markup=sub_kb)
+        await state.clear()
 
-    # Retrieve all stored data from the state
-    data = await state.get_data()
-    # Insert the share data into the database
-    insert_shares(message.from_user.id, data['name'], data['count'])
-
-    # Notify the user that the data has been saved and show the main keyboard
-    await message.answer('Дані збережено.', reply_markup=sub_kb)
-    # Clear the state data
-    await state.clear()
+    else:
+        await message.answer('Не вірна кількість активу.', reply_markup=sub_kb)
+        await state.clear()

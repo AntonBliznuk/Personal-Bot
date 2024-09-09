@@ -3,7 +3,7 @@ from aiogram.types import Message
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.context import FSMContext
 
-from app.DataManagement import insert_cripto
+from config import db_menage
 from app.keyboards import sub_kb
 
 router_cripto = Router()
@@ -22,24 +22,34 @@ async def cripto_insert(message: Message, state: FSMContext):
 
 @router_cripto.message(Cripto.name)
 async def cripto_name(message: Message, state: FSMContext):
+
     # Update the state data with the received cryptocurrency name
-    await state.update_data(name=message.text)
-    # Set the state to `Cripto.count` for receiving the amount
-    await state.set_state(Cripto.count)
-    # Prompt the user to enter the amount of the cryptocurrency
-    await message.answer("Введіть кількість.\nПриклад: 1.2")
+    if db_menage.is_valid_asset_name(message.text, 'crypto', show_error=False):
+        await state.update_data(name=message.text)
+        await state.set_state(Cripto.count)
+        await message.answer("Введіть кількість.\nПриклад: 1.2")
+
+    else:
+        await message.answer("Не вірна назва криптовалюти", reply_markup=sub_kb)
+        # Clear the state data
+        await state.clear()
+
+
 
 @router_cripto.message(Cripto.count)
 async def cripto_count(message: Message, state: FSMContext):
-    # Update the state data with the received amount
-    await state.update_data(count=message.text)
 
-    # Retrieve all stored data from the state
-    data = await state.get_data()
-    # Insert the cryptocurrency data into the database
-    insert_cripto(id=message.from_user.id, name=data['name'], count=data['count'])
+    if db_menage.is_valid_amount(message.text, show_error=False):
 
-    # Notify the user that the data has been saved and show the main keyboard
-    await message.answer("Дані збережено.", reply_markup=sub_kb)
-    # Clear the state data
-    await state.clear()
+        await state.update_data(count=message.text)
+        data = await state.get_data()
+        db_menage.insert_asset_info(message.from_user.id, 'crypto', data['name'], data['count'])
+
+        await message.answer("Дані збережено.", reply_markup=sub_kb)
+        await state.clear()
+
+    else:
+        await message.answer("Не вірна кількість активу.", reply_markup=sub_kb)
+        await state.clear()
+
+

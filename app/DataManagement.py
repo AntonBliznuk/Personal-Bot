@@ -1,108 +1,175 @@
 import sqlite3
-from app.ShareRate import shares_parser
-from app.CryptocurrencyRate import crypto_parser
-from app.HryvniaRate import hryvnia
+from app.parsers.ShareRate import share_rate_parser
+from app.parsers.CryptocurrencyRate import cryptocurrency_rate_parser
 
-# Connect to the SQLite database (bot.db) and create a cursor object for executing SQL commands
-db = sqlite3.connect('bot.db')
-cursor = db.cursor()
 
-def create_table():
-    # Create a table for cryptocurrency if it does not exist
-    cursor.execute('CREATE TABLE IF NOT EXISTS cripto (id INTEGER, name TEXT, count FLOAT)')
-    # Create a table for shares if it does not exist
-    cursor.execute('CREATE TABLE IF NOT EXISTS shares (id INTEGER, name TEXT, count FLOAT)')
-    db.commit()
+class Menager:
 
-def insert_cripto(id, name, count):
-    # Insert a new record into the cryptocurrency table
-    cursor.execute(f'INSERT INTO cripto (id ,name, count) VALUES ({id},"{name}",{count})')
-    db.commit()
+    type_list = {'crypto', 'share'}
 
-def insert_shares(id, name, count):
-    # Insert a new record into the shares table
-    cursor.execute(f'INSERT INTO shares (id ,name, count) VALUES ({id},"{name}",{count})')
-    db.commit()
+    def __init__(self, file_path: str) -> None:
+        db = sqlite3.connect(file_path)
+        cur = db.cursor()
 
-def select_info(id, what):
-    data = None
-    info_money = None
+        cur.execute("CREATE TABLE IF NOT EXISTS share (user_id INTEGER, asset_name TEXT, amount REAL)")
+        cur.execute("CREATE TABLE IF NOT EXISTS crypto (user_id INTEGER, asset_name TEXT, amount REAL)")
+        db.commit()
 
-    if what == 'cripto':
-        # Select all records from the cryptocurrency table where the id matches
-        data = cursor.execute(f'SELECT * FROM cripto WHERE id = {id}').fetchall()
-        # Extract names for parsing
-        task = [i[1] for i in data]
-        # Parse cryptocurrency information
-        info_money = crypto_parser(task)
+        self.db = db
+        self.cur = cur
 
-    elif what == 'share':
-        # Select all records from the shares table where the id matches
-        data = cursor.execute(f'SELECT * FROM shares WHERE id = {id}').fetchall()
-        # Extract names for parsing
-        task = [i[1] for i in data]
-        # Parse share information
-        info_money = shares_parser(task)
 
-    if len(data) == 0:
-        return "Записів не знайдено"  # Return message if no records are found
+    def is_valid_asset_type(self, asset_type, show_error=True)-> bool:
+        if asset_type == 'all_assets':
+            return True
 
-    else:
-        message_text = ""
-        sum_shares = 0
+        if asset_type not in Menager.type_list:
+            if show_error:
+                raise ValueError(f"wrong asset type <{asset_type}>")
+            else:
+                return False
+        return True
 
-        for i in range(len(data)):
-            name = data[i][1]
-            amount = data[i][2]
-            price = info_money[data[i][1]][0]
-            money = amount * info_money[data[i][1]][1]
 
-            # Format the message text with the details of each record
-            message_text += (f'{name}:\n'
-                             f'Кількість: {amount}\n'
-                             f'Сума в доларах: ${round(float(money), 2)}💰\n'
-                             f'Сума в гривнях: ₴{round(float(money) * hryvnia(), 2)}🪙\n'
-                             f'Курс: {price}\n\n')
 
-            sum_shares += money
+    def is_valid_asset_name(self, asset_name, asset_type='all_assets', show_error=True)-> bool:
 
-        # Append the total amount summary to the message text
-        message_text += (f'Сума: ${round(float(sum_shares), 2)}\n'
-                         f'Сума: ₴{round(float(sum_shares) * hryvnia(), 2)}')
-        return message_text
+        if asset_type == 'all_assets':
+            if not ((cryptocurrency_rate_parser(asset_name)) or (share_rate_parser(asset_name))):
+                if show_error:
+                    raise ValueError(f"wrong asset name <{asset_name}>")
+                else:
+                    return False
 
-def sum_money(id):
-    sum_all = 0
+        self.is_valid_asset_type(asset_type=asset_type)
 
-    # Select all records from both cryptocurrency and shares tables where the id matches
-    cripto = cursor.execute(f'SELECT * FROM cripto WHERE id = {id}').fetchall()
-    share = cursor.execute(f'SELECT * FROM shares WHERE id = {id}').fetchall()
+        if asset_type == 'crypto':
+            if not cryptocurrency_rate_parser(asset_name):
+                if show_error:
+                    raise ValueError(f"wrong asset name <{asset_name}>")
+                else:
+                    return False
 
-    # Extract names for parsing
-    task_cripto = [i[1] for i in cripto]
-    task_share = [i[1] for i in share]
+        elif asset_type == 'share':
+            if not share_rate_parser(asset_name):
+                if show_error:
+                    raise ValueError(f"wrong asset name <{asset_name}>")
+                else:
+                    return False
 
-    # Parse cryptocurrency and share information
-    result_cripto = crypto_parser(task_cripto)
-    result_share = shares_parser(task_share)
+        return True
 
-    # Calculate total amount for cryptocurrencies
-    for i in range(len(cripto)):
-        amount = cripto[i][2]
-        money = amount * result_cripto[cripto[i][1]][1]
-        sum_all += money
 
-    # Calculate total amount for shares
-    for i in range(len(share)):
-        amount = share[i][2]
-        money = amount * result_share[share[i][1]][1]
-        sum_all += money
 
-    # Return the total amount in dollars and hryvnias
-    return (f'Сума в долларах: ${round(sum_all, 2)}\n'
-            f'Сума в гривнях: ₴{round(sum_all * hryvnia(), 2)}')
+    def is_valid_user_id(self, user_id, asset_type='all_assets', show_error=True) -> bool:
 
-def delete(id, what):
-    # Delete records from the specified table where the id matches
-    cursor.execute(f'DELETE FROM {what} WHERE id = {id};')
-    db.commit()
+        if asset_type == 'all_assets':
+            crypto_result = self.cur.execute("SELECT * FROM crypto WHERE user_id = ?", (user_id, )).fetchone()
+            share_result = self.cur.execute("SELECT * FROM share WHERE user_id = ?", (user_id, )).fetchone()
+            if not (crypto_result or share_result):
+                if show_error:
+                    raise ValueError(f"wrong user_id <{user_id}>")
+                else:
+                    return False
+
+        self.is_valid_asset_type(asset_type=asset_type)
+
+        if asset_type == 'crypto':
+            crypto_result = self.cur.execute("SELECT * FROM crypto WHERE user_id = ?", (user_id, )).fetchone()
+            if not crypto_result:
+                if show_error:
+                    raise ValueError(f"wrong user_id <{user_id}>")
+                else:
+                    return False
+
+        if asset_type == 'share':
+            share_result = self.cur.execute("SELECT * FROM share WHERE user_id = ?", (user_id, )).fetchone()
+
+            if not share_result:
+                if show_error:
+                    raise ValueError(f"wrong user_id <{user_id}>")
+                else:
+                    return False
+        return True
+
+
+
+    def is_valid_amount(self, amount, show_error=True)-> bool:
+        try:
+            amount = float(amount)
+        except ValueError:
+            return False
+        
+        if amount <= 0:
+            if show_error:
+                raise ValueError(f"wrong amount <{amount}>")
+            else:
+                return False
+        return True
+
+
+
+    def select_assets_info(self, user_id: int, asset_type='all_assets') -> list:
+        if asset_type == 'all_assets':
+            crypto = self.cur.execute(f"SELECT asset_name, amount FROM crypto WHERE user_id = ?", (user_id, )).fetchall()
+            share = self.cur.execute(f"SELECT asset_name, amount FROM share WHERE user_id = ?", (user_id, )).fetchall()
+            return crypto + share
+
+        if self.is_valid_asset_type(asset_type=asset_type):
+            result = self.cur.execute(f"SELECT asset_name, amount FROM {asset_type} WHERE user_id = ?", (user_id, )).fetchall()
+            return result
+
+        raise ValueError("select_assets_info - Error")
+
+
+
+    def insert_asset_info(self, user_id: int, asset_type: str, asset_name: str, amount: float) -> None:
+        self.is_valid_amount(amount)
+        self.is_valid_asset_type(asset_type)
+
+        if self.is_valid_asset_name(asset_name, asset_type):
+
+            if self.cur.execute(f"SELECT * FROM {asset_type} WHERE user_id = ? and asset_name = ?", (user_id, asset_name)).fetchone() is None:
+                self.cur.execute(f"INSERT INTO {asset_type} VALUES (?, ?, ?)", (user_id, asset_name, amount))
+                self.db.commit()
+
+            else:
+                self.cur.execute(f"UPDATE {asset_type} SET amount = amount + ? WHERE asset_name = ? AND user_id = ?", (amount, asset_name, user_id))
+                self.db.commit()
+
+
+    def delete_asset_info(self, user_id: int, asset_type='all', asset_name='all') -> None:
+        self.is_valid_user_id(user_id)
+
+        if asset_type == 'all' and asset_name == 'all':
+            self.cur.execute(f"DELETE FROM crypto WHERE user_id = ?", (user_id, ))
+            self.cur.execute(f"DELETE FROM share WHERE user_id = ?", (user_id, ))
+            self.db.commit()
+            return
+
+        elif asset_type == 'all' and self.is_valid_asset_name(asset_name, show_error=False):
+            self.cur.execute(f"DELETE FROM crypto WHERE user_id = ? AND asset_name = ?", (user_id, asset_name))
+            self.cur.execute(f"DELETE FROM share WHERE user_id = ? AND asset_name = ?", (user_id, asset_name))
+            self.db.commit()
+            return
+
+        elif asset_name == 'all' and self.is_valid_asset_type(asset_type, show_error=False):
+            self.cur.execute(f"DELETE FROM {asset_type} WHERE user_id = ?", (user_id, ))
+            self.db.commit()
+            return
+
+
+        elif self.is_valid_asset_type(asset_type) and self.is_valid_asset_name(asset_name, asset_type):
+            self.cur.execute(f"DELETE FROM {asset_type} WHERE user_id = ? AND asset_name = ?", (user_id, asset_name))
+            self.db.commit()
+            return
+
+
+    def update_asset_info(self, user_id: int, asset_type: str, asset_name: str, new_amount: float) -> None:
+        self.is_valid_amount(new_amount)
+        self.is_valid_asset_type(asset_type)
+        self.is_valid_user_id(user_id, asset_type)
+        self.is_valid_asset_name(asset_name, asset_type)
+
+        self.cur.execute(f"UPDATE {asset_type} SET amount = ? WHERE asset_name = ? AND user_id = ?", (new_amount, asset_name, user_id))
+        self.db.commit()
